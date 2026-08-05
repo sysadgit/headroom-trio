@@ -27,6 +27,11 @@ services:
       context: .
       args:
         HEADROOM_BUILD_VERSION: ${HEADROOM_BUILD_VERSION:-source-build}
+    # Pulls in HEADROOM_* knobs (e.g. the model allow/deny list) from the root
+    # .env file. Optional — missing file is fine, compose just skips it.
+    env_file:
+      - path: .env
+        required: false
     # Bind to all interfaces inside the container so the published port is reachable.
     command: ["--host", "0.0.0.0"]
     environment:

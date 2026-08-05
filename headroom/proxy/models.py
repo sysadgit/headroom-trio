@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from headroom.memory import qdrant_env
 from headroom.providers.registry import ProviderApiOverrides
+from headroom.proxy.model_allowlist import ModelAllowlistConfig
 from headroom.proxy.model_router import ModelRouterConfig
 
 logger = logging.getLogger(__name__)
@@ -178,6 +179,11 @@ class ProxyConfig:
     # when configured, an ordered rule set can rewrite the outgoing model based
     # on request size / tool presence. None keeps behavior unchanged.
     model_router: ModelRouterConfig | None = None
+
+    # Model allow/deny list (Anthropic /v1/messages only). Opt-in and disabled
+    # by default; when configured, requests for a model that doesn't clear the
+    # allow/deny glob check are rejected with HTTP 403.
+    model_allowlist: ModelAllowlistConfig | None = None
 
     # CCR Tool Injection
     ccr_inject_tool: bool = True

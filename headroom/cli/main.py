@@ -32,6 +32,17 @@ def main(ctx: click.Context) -> None:
     """
     ctx.ensure_object(dict)
 
+    # Load a root .env file (if present) into the process environment before
+    # settings.json/Click envvar= resolution below, so HEADROOM_* vars set
+    # there behave like a real shell export. override=False (dotenv default)
+    # keeps an actual shell export authoritative over the file.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        pass
+
     # Apply file-backed settings (settings.json) to the process environment
     # BEFORE Click parses any subcommand's ``envvar=`` options (Click resolves
     # those when it builds the subcommand context, which happens after this

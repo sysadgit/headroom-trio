@@ -1019,6 +1019,7 @@ def proxy(
     """
     # Import here to avoid slow startup
     try:
+        from headroom.proxy.model_allowlist import ModelAllowlistConfig
         from headroom.proxy.server import (
             ProxyConfig,
             _parse_csv_tools,
@@ -1221,6 +1222,11 @@ def proxy(
         compressors=(
             {part.strip() for chunk in compressor for part in chunk.split(",") if part.strip()}
             or None
+        ),
+        model_allowlist=ModelAllowlistConfig.from_env(
+            os.environ.get("HEADROOM_MODEL_ALLOWLIST_ENABLED"),
+            os.environ.get("HEADROOM_MODEL_ALLOWLIST_ALLOW"),
+            os.environ.get("HEADROOM_MODEL_ALLOWLIST_DENY"),
         ),
         subscription_tracking_enabled=not no_subscription_tracking,
         subscription_poll_interval_s=(

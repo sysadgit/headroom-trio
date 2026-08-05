@@ -147,6 +147,7 @@ from headroom.proxy.loopback_guard import is_loopback_host
 from headroom.proxy.memory_handler import MemoryConfig, MemoryHandler
 
 # Data models (extracted to headroom/proxy/models.py for maintainability)
+from headroom.proxy.model_allowlist import ModelAllowlist, ModelAllowlistConfig
 from headroom.proxy.model_router import ModelRouter, ModelRouterConfig
 from headroom.proxy.models import CacheEntry, ProxyConfig, RateLimitState, RequestLog  # noqa: F401
 from headroom.proxy.modes import (
@@ -809,6 +810,10 @@ class HeadroomProxy(
         # the default request path is unchanged.
         self.model_router = ModelRouter(config.model_router)
 
+        # Model allow/deny list (Anthropic /v1/messages only). Disabled unless
+        # configured, so the default request path is unchanged.
+        self.model_allowlist = ModelAllowlist(config.model_allowlist)
+
         # Initialize transforms based on routing mode.
         #
         # Phase B PR-B1 retired the IntelligentContextManager / RollingWindow
@@ -1344,6 +1349,26 @@ class HeadroomProxy(
                 "optimize": self.config.optimize,
                 "backend": self.config.backend,
                 "memory_enabled": self.config.memory_enabled,
+            },
+        )
+
+    def _reject_if_model_not_allowed(self, model: str) -> JSONResponse | None:
+        """Return a 400 JSON response if ``model`` fails the allow/deny check, else None."""
+        reason = self.model_allowlist.check(model)
+        if reason is None:
+            return None
+        return JSONResponse(
+            status_code=400,
+            content={
+                "type": "error",
+                "error": {
+                    # "invalid_request_error" is what Anthropic's real API returns
+                    # for an unavailable/not-permitted model. "permission_error"
+                    # (403) reads to some clients as a bad/expired credential and
+                    # triggers a re-login flow instead of just showing the message.
+                    "type": "invalid_request_error",
+                    "message": reason,
+                },
             },
         )
 
@@ -4947,6 +4972,11 @@ def _proxy_config_from_env() -> ProxyConfig:
         model_router=ModelRouterConfig.from_env(
             os.environ.get("HEADROOM_MODEL_ROUTER_ENABLED"),
             os.environ.get("HEADROOM_MODEL_ROUTES"),
+        ),
+        model_allowlist=ModelAllowlistConfig.from_env(
+            os.environ.get("HEADROOM_MODEL_ALLOWLIST_ENABLED"),
+            os.environ.get("HEADROOM_MODEL_ALLOWLIST_ALLOW"),
+            os.environ.get("HEADROOM_MODEL_ALLOWLIST_DENY"),
         ),
     )
 
