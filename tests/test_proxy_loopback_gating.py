@@ -328,6 +328,60 @@ def test_dashboard_client_cidr_hides_stats_metadata_from_cross_origin_browser(
     assert "config" not in payload
 
 
+@pytest.mark.parametrize("cached", [False, True])
+def test_dashboard_hosts_grants_stats_metadata_for_trusted_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+    cached: bool,
+) -> None:
+    """A reverse-proxied public domain the operator explicitly trusts sees
+    Recent Requests — even though its Host header is neither loopback nor an
+    IP literal, and its peer IP (e.g. a CDN edge) is untrusted."""
+    monkeypatch.setenv("HEADROOM_PROXY_TRUSTED_DASHBOARD_HOSTS", "headroomdemo.goferzone.com")
+    client = TestClient(
+        _make_app(),
+        base_url="https://headroomdemo.goferzone.com",
+        client=("203.0.113.5", 12345),
+    )
+
+    payload = client.get("/stats", params={"cached": int(cached)}).json()
+
+    assert "recent_requests" in payload
+    assert "request_logs" in payload
+    assert "config" in payload
+
+
+def test_dashboard_hosts_hides_stats_metadata_for_untrusted_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HEADROOM_PROXY_TRUSTED_DASHBOARD_HOSTS", "headroomdemo.goferzone.com")
+    client = TestClient(
+        _make_app(),
+        base_url="https://attacker.example",
+        client=("203.0.113.5", 12345),
+    )
+
+    payload = client.get("/stats").json()
+
+    assert "recent_requests" not in payload
+
+
+def test_dashboard_hosts_hides_stats_metadata_from_cross_origin_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HEADROOM_PROXY_TRUSTED_DASHBOARD_HOSTS", "headroomdemo.goferzone.com")
+    client = TestClient(
+        _make_app(),
+        base_url="https://headroomdemo.goferzone.com",
+        client=("203.0.113.5", 12345),
+    )
+
+    payload = client.get(
+        "/stats", headers={"origin": "https://attacker.example"}
+    ).json()
+
+    assert "recent_requests" not in payload
+
+
 def test_dashboard_client_cidr_only_uses_forwarded_proto_from_trusted_gateway(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

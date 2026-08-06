@@ -50,6 +50,7 @@ except ImportError:  # pragma: no cover - fastapi is a hard dep in practice
 
 __all__ = [
     "LOOPBACK_HOSTS",
+    "host_header_hostname",
     "is_ip_literal_host_header",
     "is_loopback_host",
     "is_loopback_host_header",
@@ -128,6 +129,27 @@ def is_loopback_host_header(header_value: str | None) -> bool:
     else:
         host_part = candidate
     return is_loopback_host(host_part)
+
+
+def host_header_hostname(header_value: str | None) -> str | None:
+    """Strip the ``:port`` suffix (and IPv6 brackets) from a ``Host:`` header.
+
+    Returns the lowercased hostname/IP-literal for exact-match allow-list
+    comparisons, or ``None`` for a missing/malformed header.
+    """
+    if not header_value:
+        return None
+    candidate = header_value.strip()
+    if not candidate:
+        return None
+    if candidate.startswith("["):
+        closing = candidate.find("]")
+        if closing == -1:
+            return None
+        return candidate[1:closing].lower()
+    if candidate.count(":") == 1:
+        return candidate.rsplit(":", 1)[0].lower()
+    return candidate.lower()
 
 
 def is_ip_literal_host_header(header_value: str | None) -> bool:

@@ -40,6 +40,17 @@ services:
       # Keep all Headroom read/write state on the named volume below.
       - HEADROOM_WORKSPACE_DIR=/home/nonroot/.headroom
       - HEADROOM_CONFIG_DIR=/home/nonroot/.headroom/config
+      # Bridge-network dashboards see the browser's peer IP as the Docker
+      # gateway, not 127.0.0.1, so the dashboard's per-request log data
+      # (Recent Requests) is stripped as a security default unless the
+      # gateway is explicitly trusted here.
+      - HEADROOM_PROXY_TRUSTED_DASHBOARD_CLIENT_CIDRS=172.16.0.0/12
+      # Public demo domain (reverse-proxied to this container): its Host
+      # header is neither loopback nor an IP literal, so it needs an
+      # explicit hostname allow-list to see Recent Requests. Exact-match
+      # only — safe against DNS rebinding. This domain has no auth in
+      # front of it, so per-request tags/token counts are publicly visible.
+      - HEADROOM_PROXY_TRUSTED_DASHBOARD_HOSTS=headroomdemo.goferzone.com
       # if you want to use a custom OpenAI-compatible API endpoint,
       # uncomment and set the following line with the desired URL
       # - OPENAI_TARGET_API_URL=https://api.x.ai

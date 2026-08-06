@@ -2317,18 +2317,29 @@ def _request_is_loopback(request: Request) -> bool:
 def _request_can_view_dashboard_metadata(
     request: Request,
     trusted_dashboard_client_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...],
+    trusted_dashboard_hosts: frozenset[str] = frozenset(),
 ) -> bool:
     """Authorize sensitive ``/stats`` metadata without widening admin access."""
     if _request_is_loopback(request):
         return True
 
     from headroom.proxy.forwarded_headers import peer_is_trusted_gateway, resolve_client_ip
-    from headroom.proxy.loopback_guard import is_ip_literal_host_header
+    from headroom.proxy.loopback_guard import host_header_hostname, is_ip_literal_host_header
 
     try:
         host_header = request.headers.get("host")
     except AttributeError:
         return False
+
+    # Operator-configured exact hostname allow-list (e.g. a reverse-proxied
+    # public domain). Exact-match only, so DNS-rebinding cannot forge it —
+    # an attacker's page can never make the browser send a Host header this
+    # operator did not configure.
+    if trusted_dashboard_hosts and host_header_hostname(host_header) in trusted_dashboard_hosts:
+        if not _request_has_same_origin_or_no_provenance(request, host_header):
+            return False
+        return True
+
     if not is_ip_literal_host_header(host_header):
         return False
     # is_ip_literal_host_header() rejects a missing Host, so host_header is a str here.
@@ -2410,10 +2421,14 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     if not FASTAPI_AVAILABLE:
         raise ImportError("FastAPI required. Install: pip install fastapi uvicorn httpx")
 
-    from headroom.proxy.forwarded_headers import load_trusted_dashboard_client_cidrs
+    from headroom.proxy.forwarded_headers import (
+        load_trusted_dashboard_client_cidrs,
+        load_trusted_dashboard_hosts,
+    )
 
     # Parse once at startup so invalid operator configuration fails loudly.
     trusted_dashboard_client_cidrs = load_trusted_dashboard_client_cidrs()
+    trusted_dashboard_hosts = load_trusted_dashboard_hosts()
 
     from contextlib import asynccontextmanager
 
@@ -3620,6 +3635,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                         provider_name=proxy.config.provider_name,
                     ),
                     "model": log.get("model"),
+                    "project": (log.get("tags") or {}).get("project"),
                     "input_tokens_original": _recent_request_optional_number(
                         log, "input_tokens_original"
                     ),
@@ -4217,6 +4233,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         include_sensitive = _request_can_view_dashboard_metadata(
             request,
             trusted_dashboard_client_cidrs,
+            trusted_dashboard_hosts,
         )
         if cached:
             payload = dict(await _get_cached_stats_payload())
@@ -4241,6 +4258,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         include_sensitive = _request_can_view_dashboard_metadata(
             request,
             trusted_dashboard_client_cidrs,
+            trusted_dashboard_hosts,
         )
         if not include_sensitive:
             payload.pop("projects", None)

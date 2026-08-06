@@ -20,8 +20,10 @@ from starlette.datastructures import Headers, State
 
 from headroom.proxy.forwarded_headers import (
     TRUSTED_DASHBOARD_CLIENT_CIDRS_ENV,
+    TRUSTED_DASHBOARD_HOSTS_ENV,
     TRUSTED_GATEWAY_CIDRS_ENV,
     load_trusted_dashboard_client_cidrs,
+    load_trusted_dashboard_hosts,
     load_trusted_gateway_cidrs,
     peer_is_trusted_gateway,
     resolve_client_ip,
@@ -145,6 +147,23 @@ def test_load_dashboard_client_cidrs_empty_and_malformed_values() -> None:
     assert load_trusted_dashboard_client_cidrs("   ") == ()
     with pytest.raises(ValueError, match=TRUSTED_DASHBOARD_CLIENT_CIDRS_ENV):
         load_trusted_dashboard_client_cidrs("100.90.0.5/32,not-a-cidr")
+
+
+def test_load_dashboard_hosts_parses_and_lowercases() -> None:
+    assert load_trusted_dashboard_hosts(" Example.com , demo.foo.com ") == {
+        "example.com",
+        "demo.foo.com",
+    }
+
+
+def test_load_dashboard_hosts_unset_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(TRUSTED_DASHBOARD_HOSTS_ENV, raising=False)
+    assert load_trusted_dashboard_hosts() == frozenset()
+
+
+def test_load_dashboard_hosts_reads_env_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(TRUSTED_DASHBOARD_HOSTS_ENV, "headroomdemo.goferzone.com")
+    assert load_trusted_dashboard_hosts() == {"headroomdemo.goferzone.com"}
 
 
 # ──────────────────────────────────────────────────────────────────

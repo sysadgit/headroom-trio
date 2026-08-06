@@ -73,8 +73,10 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "TRUSTED_DASHBOARD_CLIENT_CIDRS_ENV",
+    "TRUSTED_DASHBOARD_HOSTS_ENV",
     "TRUSTED_GATEWAY_CIDRS_ENV",
     "load_trusted_dashboard_client_cidrs",
+    "load_trusted_dashboard_hosts",
     "load_trusted_gateway_cidrs",
     "peer_is_trusted_gateway",
     "resolve_client_ip",
@@ -85,6 +87,13 @@ __all__ = [
 #: Environment variable that holds the comma-separated CIDR allow-list.
 TRUSTED_GATEWAY_CIDRS_ENV = "HEADROOM_PROXY_TRUSTED_GATEWAY_CIDRS"
 TRUSTED_DASHBOARD_CLIENT_CIDRS_ENV = "HEADROOM_PROXY_TRUSTED_DASHBOARD_CLIENT_CIDRS"
+#: Comma-separated exact hostnames (no ports, no wildcards) allowed to see
+#: dashboard-sensitive fields despite a non-loopback, non-IP-literal Host
+#: header — e.g. a reverse-proxied public domain the operator controls.
+#: Exact-match only: an attacker's DNS-rebinding page can never produce a
+#: Host header equal to a hostname it does not control, so this is as safe
+#: as the IP-literal/CIDR path without requiring an IP literal.
+TRUSTED_DASHBOARD_HOSTS_ENV = "HEADROOM_PROXY_TRUSTED_DASHBOARD_HOSTS"
 
 
 def _parse_cidr_list(
@@ -128,6 +137,18 @@ def load_trusted_dashboard_client_cidrs(
         return _parse_cidr_list(raw)
     except ValueError as exc:
         raise ValueError(f"Invalid {TRUSTED_DASHBOARD_CLIENT_CIDRS_ENV} entry: {exc}") from exc
+
+
+def load_trusted_dashboard_hosts(raw: str | None = None) -> frozenset[str]:
+    """Parse the Dashboard trusted-hostname allow-list from its env var.
+
+    Lowercased, whitespace-trimmed, empty entries skipped. Empty/unset is
+    the default and means no hostname is trusted (existing IP-literal/CIDR
+    path is unaffected).
+    """
+    if raw is None:
+        raw = os.environ.get(TRUSTED_DASHBOARD_HOSTS_ENV, "")
+    return frozenset(host.strip().lower() for host in raw.split(",") if host.strip())
 
 
 def _normalize_ip(

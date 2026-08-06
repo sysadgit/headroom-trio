@@ -871,10 +871,11 @@
                         <div>
                             <!-- Header -->
                             <div class="grid text-xs text-gray-500 uppercase tracking-wide border-b border-border"
-                                 style="grid-template-columns: 2rem 12fr 22fr 15fr 12fr 10fr 14fr">
+                                 style="grid-template-columns: 2rem 12fr 18fr 14fr 15fr 12fr 10fr 14fr">
                                 <div class="px-2 py-3"></div>
                                 <div class="px-4 py-3 font-medium">Time</div>
                                 <div class="px-4 py-3 font-medium">Model</div>
+                                <div class="px-4 py-3 font-medium">Tag</div>
                                 <div class="px-4 py-3 font-medium text-right">Input</div>
                                 <div class="px-4 py-3 font-medium text-right">Output</div>
                                 <div class="px-4 py-3 font-medium text-right">Saved</div>
@@ -886,13 +887,16 @@
                                     <div>
                                         <div class="cursor-pointer" @click="toggleExpanded(req.request_id)">
                                             <div class="grid hover:bg-border/30 transition-colors"
-                                                 style="grid-template-columns: 2rem 12fr 22fr 15fr 12fr 10fr 14fr">
+                                                 style="grid-template-columns: 2rem 12fr 18fr 14fr 15fr 12fr 10fr 14fr">
                                                 <div class="px-2 py-3 text-gray-500 flex items-center justify-center">
                                                     <span x-text="expandedRows[req.request_id] ? '-' : '+'"></span>
                                                 </div>
                                                 <div class="px-4 py-3 font-mono text-gray-400 truncate" x-text="formatTime(req.timestamp)"></div>
                                                 <div class="px-4 py-3 min-w-0">
                                                     <span class="px-2 py-0.5 bg-border rounded text-xs truncate" x-text="truncateModel(req.model)"></span>
+                                                </div>
+                                                <div class="px-4 py-3 min-w-0">
+                                                    <span class="px-2 py-0.5 bg-border rounded text-xs truncate" x-text="req.project || '—'"></span>
                                                 </div>
                                                 <div class="px-4 py-3 text-right font-mono tabular-nums" x-text="formatNumber(req.input_tokens_optimized)"></div>
                                                 <div class="px-4 py-3 text-right font-mono tabular-nums" x-text="formatNumber(req.output_tokens || 0)"></div>
