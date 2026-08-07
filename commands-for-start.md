@@ -35,3 +35,6 @@ docker rm old_container_id
 
 # run container on server
 sudo docker run -d --name headroom-trio -p 8787:8787 --env-file .env -v headroom_workspace:/home/nonroot/.headroom headroom-trio
+
+# run as compose
+sudo docker compose up -d --build
