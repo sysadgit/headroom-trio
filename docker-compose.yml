@@ -110,5 +110,9 @@ services:
 # `docker compose down -v` to delete the stored data as well).
 volumes:
   headroom_workspace:    # persists dashboard savings/history, logs, config, memory state, session stats, and TOIN
+    # Pinned so `docker compose up` shares the same volume as a plain
+    # `docker run -v headroom_workspace:...` invocation, instead of Compose's
+    # default project-prefixed name (e.g. `headroom-trio_headroom_workspace`).
+    name: headroom_workspace
   qdrant_data:
   neo4j_data:
