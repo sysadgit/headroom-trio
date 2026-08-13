@@ -113,6 +113,6 @@ volumes:
     # Pinned so `docker compose up` shares the same volume as a plain
     # `docker run -v headroom_workspace:...` invocation, instead of Compose's
     # default project-prefixed name (e.g. `headroom-trio_headroom_workspace`).
-    name: headroom_workspace
+    name: headroom-trio_workspace
   qdrant_data:
   neo4j_data:
