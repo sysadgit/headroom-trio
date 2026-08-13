@@ -50,7 +50,7 @@ services:
       # explicit hostname allow-list to see Recent Requests. Exact-match
       # only — safe against DNS rebinding. This domain has no auth in
       # front of it, so per-request tags/token counts are publicly visible.
-      - HEADROOM_PROXY_TRUSTED_DASHBOARD_HOSTS=headroomdemo.goferzone.com
+      - HEADROOM_PROXY_TRUSTED_DASHBOARD_HOSTS=headroom.goferzone.com
       # if you want to use a custom OpenAI-compatible API endpoint,
       # uncomment and set the following line with the desired URL
       # - OPENAI_TARGET_API_URL=https://api.x.ai
