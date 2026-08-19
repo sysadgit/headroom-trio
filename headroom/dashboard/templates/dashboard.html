@@ -2027,7 +2027,7 @@
                     const before = msgs.substring(0, 2000) + (msgs.length > 2000 ? '\n\n[truncated]' : '');
                     const after = response.substring(0, 2000) + (response.length > 2000 ? '\n\n[truncated]' : '');
 
-                    const time = t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : '--:--:--';
+                    const time = t.timestamp ? new Date(t.timestamp).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) : '--:--:--';
                     const model = (t.model || 'unknown').replace(/^(anthropic\.|openai\.)/, '').substring(0, 25);
                     const tokensSaved = t.tokens_saved || 0;
                     const savingsPct = ((t.savings_percent || 0)).toFixed(0);
@@ -2113,7 +2113,7 @@
                     const diff = (now - d) / 1000;
                     if (diff < 60) return Math.floor(diff) + 's ago';
                     if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-                    return d.toLocaleTimeString();
+                    return d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
                 },
 
                 formatDate(ts) {
