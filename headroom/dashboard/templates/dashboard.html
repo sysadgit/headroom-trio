@@ -2108,12 +2108,7 @@
 
                 formatTime(ts) {
                     if (!ts) return '-';
-                    const d = new Date(ts);
-                    const now = new Date();
-                    const diff = (now - d) / 1000;
-                    if (diff < 60) return Math.floor(diff) + 's ago';
-                    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-                    return d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+                    return new Date(ts).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
                 },
 
                 formatDate(ts) {
