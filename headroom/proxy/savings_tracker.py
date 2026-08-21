@@ -477,6 +477,34 @@ def _normalize_daily_projects(raw: Any) -> dict[str, Any]:
     }
 
 
+def _tuesday_week_start(timestamp: datetime) -> str:
+    """UTC date (Tue–Mon week) that ``timestamp`` falls into, as an ISO date string.
+
+    Independent of ``_bucket_start``'s Monday-start week, which backs the
+    `/stats-history` charts and stays untouched.
+    """
+    day_start = timestamp.astimezone(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    # weekday(): Mon=0 .. Sun=6; Tuesday=1, so this is days since the most recent Tuesday.
+    return (day_start - timedelta(days=(day_start.weekday() - 1) % 7)).date().isoformat()
+
+
+def _normalize_weekly_projects(raw: Any) -> dict[str, Any]:
+    """Normalize the ``weekly_projects`` bucket (this week's per-project rollup).
+
+    Keyed by the UTC Tuesday-start week (via ``_tuesday_week_start``), mirroring
+    ``_normalize_daily_projects``.
+    """
+    if not isinstance(raw, dict):
+        return {"week_start": None, "projects": {}}
+    week_start = raw.get("week_start")
+    return {
+        "week_start": week_start if isinstance(week_start, str) else None,
+        "projects": _normalize_projects(raw.get("projects")),
+    }
+
+
 def _normalize_projects(raw: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(raw, dict):
         return {}
@@ -852,6 +880,16 @@ class SavingsTracker:
                 input_cost_usd_delta=delta_input_cost_usd,
             )
 
+            self._record_weekly_project_locked(
+                project,
+                timestamp_dt=timestamp_dt,
+                requests_delta=1,
+                tokens_saved_delta=delta_tokens_saved,
+                savings_usd_delta=delta_savings_usd,
+                input_tokens_delta=delta_input_tokens,
+                input_cost_usd_delta=delta_input_cost_usd,
+            )
+
             # In --mode cache, headroom's own compression (tokens_saved) is
             # near-always 0 by design — the frozen prefix is byte-replayed,
             # not lossy-compressed, to keep Bedrock's prompt cache warm. Gating
@@ -1036,6 +1074,53 @@ class SavingsTracker:
             )
             del projects[evict]
 
+    def _record_weekly_project_locked(
+        self,
+        project: str | None,
+        *,
+        timestamp_dt: datetime,
+        requests_delta: int = 0,
+        tokens_saved_delta: int = 0,
+        savings_usd_delta: float = 0.0,
+        input_tokens_delta: int = 0,
+        input_cost_usd_delta: float = 0.0,
+    ) -> None:
+        """Accumulate this week's (UTC Tuesday-start) per-project savings.
+
+        Mirrors ``_record_daily_project_locked`` but keyed by week start.
+        """
+        name = sanitize_project_name(project)
+        if name is None:
+            return
+        week_start = _tuesday_week_start(timestamp_dt)
+        bucket = self._state.setdefault(
+            "weekly_projects", {"week_start": week_start, "projects": {}}
+        )
+        if bucket.get("week_start") != week_start:
+            bucket["week_start"] = week_start
+            bucket["projects"] = {}
+        projects: dict[str, dict[str, Any]] = bucket["projects"]
+        entry = projects.setdefault(name, _empty_project_entry())
+        entry["requests"] += max(requests_delta, 0)
+        entry["tokens_saved"] += max(tokens_saved_delta, 0)
+        entry["compression_savings_usd"] = round(
+            entry["compression_savings_usd"] + max(savings_usd_delta, 0.0), 6
+        )
+        entry["total_input_tokens"] += max(input_tokens_delta, 0)
+        entry["total_input_cost_usd"] = round(
+            entry["total_input_cost_usd"] + max(input_cost_usd_delta, 0.0), 6
+        )
+        entry["last_activity_at"] = _to_utc_iso(timestamp_dt)
+        if len(projects) > DEFAULT_MAX_PROJECTS:
+            evict = min(
+                (key for key in projects if key != name),
+                key=lambda key: (
+                    projects[key]["tokens_saved"],
+                    projects[key]["last_activity_at"] or "",
+                ),
+            )
+            del projects[evict]
+
     def _record_by_model_locked(
         self,
         model: str,
@@ -1105,6 +1190,29 @@ class SavingsTracker:
             result[name] = view
         return result
 
+    def _weekly_projects_snapshot_locked(self) -> dict[str, dict[str, Any]]:
+        """This week's (UTC Tuesday-start) per-project stats, same shape as ``_projects_snapshot_locked``."""
+        bucket = self._state.get("weekly_projects") or {}
+        current_week_start = _tuesday_week_start(_utc_now())
+        if bucket.get("week_start") != current_week_start:
+            return {}
+        projects = bucket.get("projects", {})
+        ranked = sorted(
+            projects.items(),
+            key=lambda item: item[1]["tokens_saved"],
+            reverse=True,
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for name, entry in ranked:
+            view = dict(entry)
+            total_before = entry["tokens_saved"] + entry["total_input_tokens"]
+            view["savings_percent"] = round(
+                (entry["tokens_saved"] / total_before * 100) if total_before > 0 else 0.0,
+                2,
+            )
+            result[name] = view
+        return result
+
     def _by_model_snapshot_locked(self) -> dict[str, dict[str, Any]]:
         """Per-model stats ranked by savings."""
         by_model = self._state.get("by_model", {})
@@ -1142,6 +1250,7 @@ class SavingsTracker:
             )
             response["projects"] = self._projects_snapshot_locked()
             response["projects_today"] = self._daily_projects_snapshot_locked()
+            response["projects_this_week"] = self._weekly_projects_snapshot_locked()
             return response
 
     def stats_preview(self, recent_points: int = 20) -> dict[str, Any]:
@@ -1274,6 +1383,7 @@ class SavingsTracker:
             "history": [],
             "projects": {},
             "daily_projects": {"date": None, "projects": {}},
+            "weekly_projects": {"week_start": None, "projects": {}},
             "by_model": {},
         }
 
@@ -1375,6 +1485,7 @@ class SavingsTracker:
             "history": normalized_history,
             "projects": _normalize_projects(raw.get("projects")),
             "daily_projects": _normalize_daily_projects(raw.get("daily_projects")),
+            "weekly_projects": _normalize_weekly_projects(raw.get("weekly_projects")),
             "by_model": _normalize_by_model(raw.get("by_model")),
         }
         raw_lifetime_metrics = raw.get("lifetime_metrics")
@@ -1544,6 +1655,9 @@ class SavingsTracker:
                 "history": self._state["history"],
                 "projects": self._state.get("projects", {}),
                 "daily_projects": self._state.get("daily_projects", {"date": None, "projects": {}}),
+                "weekly_projects": self._state.get(
+                    "weekly_projects", {"week_start": None, "projects": {}}
+                ),
                 "by_model": self._state.get("by_model", {}),
                 "lifetime_metrics": lifetime_metrics,
             }

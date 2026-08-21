@@ -4313,6 +4313,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         if not include_sensitive:
             payload.pop("projects", None)
             payload.pop("projects_today", None)
+            payload.pop("projects_this_week", None)
             persistence = payload.get("persistence")
             if isinstance(persistence, dict):
                 payload["persistence"] = {**persistence, "error": None}
