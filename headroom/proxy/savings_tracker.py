@@ -462,6 +462,21 @@ def _empty_project_entry() -> dict[str, Any]:
     }
 
 
+def _normalize_daily_projects(raw: Any) -> dict[str, Any]:
+    """Normalize the ``daily_projects`` bucket (today's per-project rollup).
+
+    Keyed by UTC calendar date so it rolls over consistently with the rest
+    of the codebase's ``_to_utc_iso`` convention (see ``_record_daily_project_locked``).
+    """
+    if not isinstance(raw, dict):
+        return {"date": None, "projects": {}}
+    date = raw.get("date")
+    return {
+        "date": date if isinstance(date, str) else None,
+        "projects": _normalize_projects(raw.get("projects")),
+    }
+
+
 def _normalize_projects(raw: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(raw, dict):
         return {}
@@ -827,6 +842,16 @@ class SavingsTracker:
                 input_cost_usd_delta=delta_input_cost_usd,
             )
 
+            self._record_daily_project_locked(
+                project,
+                timestamp_dt=timestamp_dt,
+                requests_delta=1,
+                tokens_saved_delta=delta_tokens_saved,
+                savings_usd_delta=delta_savings_usd,
+                input_tokens_delta=delta_input_tokens,
+                input_cost_usd_delta=delta_input_cost_usd,
+            )
+
             # In --mode cache, headroom's own compression (tokens_saved) is
             # near-always 0 by design — the frozen prefix is byte-replayed,
             # not lossy-compressed, to keep Bedrock's prompt cache warm. Gating
@@ -964,6 +989,53 @@ class SavingsTracker:
             )
             del projects[evict]
 
+    def _record_daily_project_locked(
+        self,
+        project: str | None,
+        *,
+        timestamp_dt: datetime,
+        requests_delta: int = 0,
+        tokens_saved_delta: int = 0,
+        savings_usd_delta: float = 0.0,
+        input_tokens_delta: int = 0,
+        input_cost_usd_delta: float = 0.0,
+    ) -> None:
+        """Accumulate today's (UTC calendar day) per-project savings.
+
+        Mirrors ``_record_project_locked`` but resets whenever the UTC date
+        rolls over, so ``/stats-lifetime`` can show "today only" totals
+        without a full daily-history table.
+        """
+        name = sanitize_project_name(project)
+        if name is None:
+            return
+        today = timestamp_dt.astimezone(timezone.utc).date().isoformat()
+        bucket = self._state.setdefault("daily_projects", {"date": today, "projects": {}})
+        if bucket.get("date") != today:
+            bucket["date"] = today
+            bucket["projects"] = {}
+        projects: dict[str, dict[str, Any]] = bucket["projects"]
+        entry = projects.setdefault(name, _empty_project_entry())
+        entry["requests"] += max(requests_delta, 0)
+        entry["tokens_saved"] += max(tokens_saved_delta, 0)
+        entry["compression_savings_usd"] = round(
+            entry["compression_savings_usd"] + max(savings_usd_delta, 0.0), 6
+        )
+        entry["total_input_tokens"] += max(input_tokens_delta, 0)
+        entry["total_input_cost_usd"] = round(
+            entry["total_input_cost_usd"] + max(input_cost_usd_delta, 0.0), 6
+        )
+        entry["last_activity_at"] = _to_utc_iso(timestamp_dt)
+        if len(projects) > DEFAULT_MAX_PROJECTS:
+            evict = min(
+                (key for key in projects if key != name),
+                key=lambda key: (
+                    projects[key]["tokens_saved"],
+                    projects[key]["last_activity_at"] or "",
+                ),
+            )
+            del projects[evict]
+
     def _record_by_model_locked(
         self,
         model: str,
@@ -995,6 +1067,28 @@ class SavingsTracker:
     def _projects_snapshot_locked(self) -> dict[str, dict[str, Any]]:
         """Per-project stats with a derived ``savings_percent``, sorted by savings."""
         projects = self._state.get("projects", {})
+        ranked = sorted(
+            projects.items(),
+            key=lambda item: item[1]["tokens_saved"],
+            reverse=True,
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for name, entry in ranked:
+            view = dict(entry)
+            total_before = entry["tokens_saved"] + entry["total_input_tokens"]
+            view["savings_percent"] = round(
+                (entry["tokens_saved"] / total_before * 100) if total_before > 0 else 0.0,
+                2,
+            )
+            result[name] = view
+        return result
+
+    def _daily_projects_snapshot_locked(self) -> dict[str, dict[str, Any]]:
+        """Today's (UTC) per-project stats, same shape as ``_projects_snapshot_locked``."""
+        bucket = self._state.get("daily_projects") or {}
+        if bucket.get("date") != _utc_now().date().isoformat():
+            return {}
+        projects = bucket.get("projects", {})
         ranked = sorted(
             projects.items(),
             key=lambda item: item[1]["tokens_saved"],
@@ -1047,6 +1141,7 @@ class SavingsTracker:
                 }
             )
             response["projects"] = self._projects_snapshot_locked()
+            response["projects_today"] = self._daily_projects_snapshot_locked()
             return response
 
     def stats_preview(self, recent_points: int = 20) -> dict[str, Any]:
@@ -1178,6 +1273,7 @@ class SavingsTracker:
             "display_session": _empty_display_session(),
             "history": [],
             "projects": {},
+            "daily_projects": {"date": None, "projects": {}},
             "by_model": {},
         }
 
@@ -1278,6 +1374,7 @@ class SavingsTracker:
             "display_session": _normalize_display_session(raw.get("display_session")),
             "history": normalized_history,
             "projects": _normalize_projects(raw.get("projects")),
+            "daily_projects": _normalize_daily_projects(raw.get("daily_projects")),
             "by_model": _normalize_by_model(raw.get("by_model")),
         }
         raw_lifetime_metrics = raw.get("lifetime_metrics")
@@ -1446,6 +1543,7 @@ class SavingsTracker:
                 "display_session": self._state["display_session"],
                 "history": self._state["history"],
                 "projects": self._state.get("projects", {}),
+                "daily_projects": self._state.get("daily_projects", {"date": None, "projects": {}}),
                 "by_model": self._state.get("by_model", {}),
                 "lifetime_metrics": lifetime_metrics,
             }
