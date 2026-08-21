@@ -1316,6 +1316,80 @@
                     <section class="bg-surface rounded-lg p-4 border border-border"><h3 class="mb-3 text-sm text-gray-300">Stacks</h3><template x-for="[name, count] in Object.entries(lifetimeStats.requests?.by_stack || {})" :key="name"><div class="flex justify-between text-sm"><span x-text="name"></span><span x-text="formatNumber(count)"></span></div></template></section>
                     <section class="bg-surface rounded-lg p-4 border border-border"><h3 class="mb-3 text-sm text-gray-300">Top Models + Other</h3><template x-for="[name, metric] in Object.entries(lifetimeStats.by_model || {})" :key="name"><div class="flex justify-between text-sm"><span class="truncate pr-3" x-text="name"></span><span x-text="formatNumber(metric.input_tokens + metric.output_tokens)"></span></div></template></section>
                 </div>
+                <!-- Team Savings (projects grouped by "team:" prefix, e.g. developer:*) -->
+                <section class="bg-surface rounded-lg border border-border overflow-hidden mt-6">
+                    <div class="px-4 py-3 border-b border-border flex justify-between items-center">
+                        <div>
+                            <span class="text-sm font-medium text-gray-300">Team Savings</span>
+                            <div class="text-xs text-gray-500 mt-0.5">Lifetime totals — projects grouped by team prefix (e.g. developer:*)</div>
+                        </div>
+                        <span class="text-xs text-gray-500 font-mono"
+                              x-text="Object.keys(teamSavings).length + ' team(s)'"></span>
+                    </div>
+
+                    <template x-if="Object.keys(teamSavings).length === 0">
+                        <div class="px-4 py-8 text-center">
+                            <div class="text-xs text-gray-500">No per-project data yet.</div>
+                        </div>
+                    </template>
+
+                    <template x-if="Object.keys(teamSavings).length > 0">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm" style="table-layout:fixed">
+                                <colgroup>
+                                    <col style="width:20%">
+                                    <col style="width:9%">
+                                    <col style="width:14%">
+                                    <col style="width:13%">
+                                    <col style="width:11%">
+                                    <col style="width:16%">
+                                    <col style="width:17%">
+                                </colgroup>
+                                <thead class="text-xs text-gray-500 tracking-wide">
+                                    <tr>
+                                        <th class="px-4 py-3 font-medium text-left">Project</th>
+                                        <th class="px-4 py-3 font-medium text-right">Requests</th>
+                                        <th class="px-4 py-3 font-medium text-right">Total Tokens</th>
+                                        <th class="px-4 py-3 font-medium text-right">Tokens Saved</th>
+                                        <th class="px-4 py-3 font-medium text-right">Saved $</th>
+                                        <th class="px-4 py-3 font-medium text-right">Savings %</th>
+                                        <th class="px-4 py-3 font-medium text-right md:table-cell">Last Active</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-border">
+                                    <template x-for="[team, info] in Object.entries(teamSavings)" :key="team">
+                                        <tr class="hover:bg-border/30 transition-colors">
+                                            <td class="px-4 py-3 text-left">
+                                                <span class="px-2 py-0.5 bg-border text-xs font-mono" x-text="team"></span>
+                                            </td>
+                                            <td class="px-4 py-3 text-right font-mono tabular-nums"
+                                                x-text="formatNumber(info.requests || 0)"></td>
+                                            <td class="px-4 py-3 text-right font-mono tabular-nums"
+                                                x-text="formatNumber(info.total_input_tokens || 0)"></td>
+                                            <td class="px-4 py-3 text-right font-mono tabular-nums text-accent"
+                                                x-text="formatNumber(info.tokens_saved || 0)"></td>
+                                            <td class="px-4 py-3 text-right font-mono tabular-nums text-emerald-400"
+                                                x-text="'$' + formatCurrency(info.compression_savings_usd || 0)"></td>
+                                            <td class="px-4 py-3 text-right">
+                                                <div class="flex items-center justify-end gap-2">
+                                                    <div class="w-16 h-1.5 bg-border rounded-full overflow-hidden">
+                                                        <div class="h-full bg-accent rounded-full"
+                                                             :style="'width:' + Math.min(info.savings_percent || 0, 100) + '%'"></div>
+                                                    </div>
+                                                    <span class="text-accent font-mono tabular-nums text-xs w-10 text-right"
+                                                          x-text="(info.savings_percent || 0).toFixed(1) + '%'"></span>
+                                                </div>
+                                            </td>
+                                            <td class="px-4 py-3 text-right text-xs text-gray-500 font-mono md:table-cell"
+                                                x-text="info.last_activity_at ? new Date(info.last_activity_at).toLocaleString() : '—'"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </template>
+                </section>
+
                 <!-- Per-Project Savings Breakdown -->
                 <section class="bg-surface rounded-lg border border-border overflow-hidden mt-6">
                     <div class="px-4 py-3 border-b border-border flex justify-between items-center">
@@ -2471,6 +2545,35 @@
 
                 get cacheSessionActive() {
                     return (this.stats.prefix_cache?.totals?.requests || 0) > 0;
+                },
+
+                get teamSavings() {
+                    const teams = {};
+                    for (const [project, info] of Object.entries(this.lifetimeStats.projects || {})) {
+                        const team = project.includes(':') ? project.split(':')[0] : project;
+                        if (!teams[team]) {
+                            teams[team] = {
+                                requests: 0,
+                                total_input_tokens: 0,
+                                tokens_saved: 0,
+                                compression_savings_usd: 0,
+                                last_activity_at: null,
+                            };
+                        }
+                        const t = teams[team];
+                        t.requests += info.requests || 0;
+                        t.total_input_tokens += info.total_input_tokens || 0;
+                        t.tokens_saved += info.tokens_saved || 0;
+                        t.compression_savings_usd += info.compression_savings_usd || 0;
+                        if (info.last_activity_at && (!t.last_activity_at || info.last_activity_at > t.last_activity_at)) {
+                            t.last_activity_at = info.last_activity_at;
+                        }
+                    }
+                    for (const t of Object.values(teams)) {
+                        const total = t.tokens_saved + t.total_input_tokens;
+                        t.savings_percent = total > 0 ? (t.tokens_saved / total * 100) : 0;
+                    }
+                    return teams;
                 },
 
                 get lifetimeCacheReadTokens() {
