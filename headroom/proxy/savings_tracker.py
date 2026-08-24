@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from headroom import paths as _paths
 from headroom.proxy import project_name_policy
@@ -465,8 +466,7 @@ def _empty_project_entry() -> dict[str, Any]:
 def _normalize_daily_projects(raw: Any) -> dict[str, Any]:
     """Normalize the ``daily_projects`` bucket (today's per-project rollup).
 
-    Keyed by UTC calendar date so it rolls over consistently with the rest
-    of the codebase's ``_to_utc_iso`` convention (see ``_record_daily_project_locked``).
+    Keyed by IST calendar date (see ``_record_daily_project_locked``).
     """
     if not isinstance(raw, dict):
         return {"date": None, "projects": {}}
@@ -477,23 +477,26 @@ def _normalize_daily_projects(raw: Any) -> dict[str, Any]:
     }
 
 
-def _tuesday_week_start(timestamp: datetime) -> str:
-    """UTC date (Tue–Mon week) that ``timestamp`` falls into, as an ISO date string.
+_IST = ZoneInfo("Asia/Kolkata")
 
-    Independent of ``_bucket_start``'s Monday-start week, which backs the
+
+def _tuesday_week_start(timestamp: datetime) -> str:
+    """IST date (Wed 00:00 – Tue 24:00 IST week) that ``timestamp`` falls into.
+
+    Independent of ``_bucket_start``'s Monday-start UTC week, which backs the
     `/stats-history` charts and stays untouched.
     """
-    day_start = timestamp.astimezone(timezone.utc).replace(
+    day_start_ist = timestamp.astimezone(_IST).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    # weekday(): Mon=0 .. Sun=6; Tuesday=1, so this is days since the most recent Tuesday.
-    return (day_start - timedelta(days=(day_start.weekday() - 1) % 7)).date().isoformat()
+    # weekday(): Mon=0 .. Sun=6; Wednesday=2, so this is days since the most recent Wednesday.
+    return (day_start_ist - timedelta(days=(day_start_ist.weekday() - 2) % 7)).date().isoformat()
 
 
 def _normalize_weekly_projects(raw: Any) -> dict[str, Any]:
     """Normalize the ``weekly_projects`` bucket (this week's per-project rollup).
 
-    Keyed by the UTC Tuesday-start week (via ``_tuesday_week_start``), mirroring
+    Keyed by the IST Wednesday-start week (via ``_tuesday_week_start``), mirroring
     ``_normalize_daily_projects``.
     """
     if not isinstance(raw, dict):
@@ -1038,16 +1041,16 @@ class SavingsTracker:
         input_tokens_delta: int = 0,
         input_cost_usd_delta: float = 0.0,
     ) -> None:
-        """Accumulate today's (UTC calendar day) per-project savings.
+        """Accumulate today's (IST calendar day) per-project savings.
 
-        Mirrors ``_record_project_locked`` but resets whenever the UTC date
+        Mirrors ``_record_project_locked`` but resets whenever the IST date
         rolls over, so ``/stats-lifetime`` can show "today only" totals
         without a full daily-history table.
         """
         name = sanitize_project_name(project)
         if name is None:
             return
-        today = timestamp_dt.astimezone(timezone.utc).date().isoformat()
+        today = timestamp_dt.astimezone(_IST).date().isoformat()
         bucket = self._state.setdefault("daily_projects", {"date": today, "projects": {}})
         if bucket.get("date") != today:
             bucket["date"] = today
@@ -1085,7 +1088,7 @@ class SavingsTracker:
         input_tokens_delta: int = 0,
         input_cost_usd_delta: float = 0.0,
     ) -> None:
-        """Accumulate this week's (UTC Tuesday-start) per-project savings.
+        """Accumulate this week's (IST Wed 00:00 - Tue 24:00) per-project savings.
 
         Mirrors ``_record_daily_project_locked`` but keyed by week start.
         """
@@ -1169,9 +1172,9 @@ class SavingsTracker:
         return result
 
     def _daily_projects_snapshot_locked(self) -> dict[str, dict[str, Any]]:
-        """Today's (UTC) per-project stats, same shape as ``_projects_snapshot_locked``."""
+        """Today's (IST) per-project stats, same shape as ``_projects_snapshot_locked``."""
         bucket = self._state.get("daily_projects") or {}
-        if bucket.get("date") != _utc_now().date().isoformat():
+        if bucket.get("date") != _utc_now().astimezone(_IST).date().isoformat():
             return {}
         projects = bucket.get("projects", {})
         ranked = sorted(
@@ -1191,7 +1194,7 @@ class SavingsTracker:
         return result
 
     def _weekly_projects_snapshot_locked(self) -> dict[str, dict[str, Any]]:
-        """This week's (UTC Tuesday-start) per-project stats, same shape as ``_projects_snapshot_locked``."""
+        """This week's (IST Wed 00:00 - Tue 24:00) per-project stats, same shape as ``_projects_snapshot_locked``."""
         bucket = self._state.get("weekly_projects") or {}
         current_week_start = _tuesday_week_start(_utc_now())
         if bucket.get("week_start") != current_week_start:
