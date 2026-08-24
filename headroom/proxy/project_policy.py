@@ -21,6 +21,19 @@ def classify_project(headers: Mapping[str, Any] | Any) -> str | None:
     return sanitize_project_name(value)
 
 
+def is_team_tagged_project(project: str | None) -> bool:
+    """True when ``project`` follows the required ``team:name`` shape.
+
+    Examples: ``developer:Bharathi_Ms``, ``ceo:vignesh``, ``pm:gopi``. Both
+    sides of the colon must be non-blank so a bare ``"team:"`` or ``":name"``
+    doesn't count as attributed.
+    """
+    if not project:
+        return False
+    team, sep, name = project.partition(":")
+    return bool(sep) and bool(team.strip()) and bool(name.strip())
+
+
 def split_project_path(path: str) -> tuple[str | None, str]:
     """Split ``/p/<name>/rest`` into ``(name, /rest)``."""
     if not path.startswith(PROJECT_PATH_PREFIX):

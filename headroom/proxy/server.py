@@ -159,6 +159,7 @@ from headroom.proxy.modes import (
 from headroom.proxy.probe_recorder import probe_recorder_from_env
 from headroom.proxy.project_context import (
     classify_project,
+    is_team_tagged_project,
     set_current_project,
     strip_project_path_prefix,
 )
@@ -3128,6 +3129,37 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         allow_headers=["Content-Type", "Authorization"],
     )
 
+    # Paths that never carry a client project (dashboard/admin/health/internal
+    # `/v1/*` APIs). Everything else — including the LLM-forwarding routes
+    # registered by register_provider_routes, whose exact paths vary per
+    # provider (/v1/messages, /chat/completions, the catch-all passthrough,
+    # etc.) — requires a team-tagged X-Headroom-Project header when
+    # HEADROOM_REQUIRE_PROJECT=1 (off by default, so untagged clients keep
+    # working until an operator opts in), so new forwarding routes are gated
+    # automatically instead of needing to opt in individually.
+    _PROJECT_EXEMPT_PATH_PREFIXES = (
+        "/dashboard",
+        "/favicon.ico",
+        "/health",
+        "/livez",
+        "/readyz",
+        "/admin",
+        "/debug",
+        "/settings",
+        "/metrics",
+        "/quota",
+        "/subscription-window",
+        "/stats",
+        "/cache",
+        "/transformations",
+        "/v1/retrieve",
+        "/v1/feedback",
+        "/v1/telemetry",
+        "/v1/toin",
+        "/v1/compress",
+        "/v1/models",
+    )
+
     # X-Headroom-Stack: SDK adapters (TS openai/anthropic/etc.) tag their
     # requests so telemetry can segment by integration surface. Registered
     # before extension middleware so any extension-level auth/guards run
@@ -3146,7 +3178,26 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         method = request.method
         query = request.url.query
         headers = dict(request.headers.items())
-        set_current_project(classify_project(headers) or prefix_project)
+        resolved_project = classify_project(headers) or prefix_project
+        set_current_project(resolved_project)
+        if (
+            _get_env_bool("HEADROOM_REQUIRE_PROJECT", False)
+            and method != "OPTIONS"
+            and not path.startswith(_PROJECT_EXEMPT_PATH_PREFIXES)
+            and not is_team_tagged_project(resolved_project)
+        ):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        "Project attribution required. Set the X-Headroom-Project "
+                        "header to a 'team:name' or set in .bashrc or .zshrc - | export ANTHROPIC_CUSTOM_HEADERS=X-Headroom-Project: developer:Bharathi | value (e.g. developer:Bharathi_Ms, "
+                        " or route through "
+                        "/p/<team:name>/..."
+                    ),
+                    "type": "missing_project",
+                },
+            )
         # Path-based Codex identification: stamp X-Client: codex on the
         # Responses endpoint for callers that don't otherwise classify (e.g.
         # Codex Desktop, whose User-Agent isn't a known codex UA). Without it

@@ -23,6 +23,7 @@ from headroom.proxy.project_policy import (
     PROJECT_HEADER,
     PROJECT_PATH_PREFIX,
     classify_project,
+    is_team_tagged_project,
     split_project_path,
     with_project_prefix,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "PROJECT_PATH_PREFIX",
     "classify_project",
     "get_current_project",
+    "is_team_tagged_project",
     "set_current_project",
     "split_project_path",
     "strip_project_path_prefix",
