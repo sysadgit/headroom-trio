@@ -1704,6 +1704,8 @@
                                                     <div class="text-sm text-gray-300" x-text="formatDate(point.timestamp)"></div>
                                                     <div class="text-xs text-gray-500"
                                                          x-text="formatNumber(point.total_tokens_saved) + ' cumulative'"></div>
+                                                    <div class="text-xs text-gray-500"
+                                                         x-text="formatNumber(point.total_input_tokens_delta || 0) + ' tokens used'"></div>
                                                 </div>
                                                 <div class="text-right">
                                                     <div class="font-mono text-sm text-accent"
@@ -2658,15 +2660,15 @@
                 },
 
                 get recentDailyHistory() {
-                    return [...(this.historyStats.series?.daily || [])].slice(-7).reverse();
+                    return [...(this.historyStats.series?.daily || [])].slice(-12).reverse();
                 },
 
                 get recentWeeklyHistory() {
-                    return [...(this.historyStats.series?.weekly || [])].slice(-6).reverse();
+                    return [...(this.historyStats.series?.weekly || [])].slice(-12).reverse();
                 },
 
                 get recentMonthlyHistory() {
-                    return [...(this.historyStats.series?.monthly || [])].slice(-6).reverse();
+                    return [...(this.historyStats.series?.monthly || [])].slice(-12).reverse();
                 },
 
                 get recentHistoricalPoints() {
