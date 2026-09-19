@@ -463,6 +463,77 @@ def _empty_project_entry() -> dict[str, Any]:
     }
 
 
+def _empty_history_rollup_entry(bucket_key: str) -> dict[str, Any]:
+    return {
+        "timestamp": bucket_key,
+        "tokens_saved": 0,
+        "compression_savings_usd_delta": 0.0,
+        "total_tokens_saved": 0,
+        "compression_savings_usd": 0.0,
+        "total_input_tokens_delta": 0,
+        "total_input_tokens": 0,
+        "total_input_cost_usd_delta": 0.0,
+        "total_input_cost_usd": 0.0,
+        "output_tokens_saved_delta": 0,
+        "output_savings_usd_delta": 0.0,
+        "by_provider": {},
+        "by_model": {},
+    }
+
+
+def _normalize_history_rollup(raw: Any) -> dict[str, dict[str, Any]]:
+    """Normalize a persisted daily/weekly/monthly rollup bucket map.
+
+    Keyed by bucket-start UTC timestamp (see ``_bucket_start``); each value
+    has the same shape ``_build_rollup`` produces, so `/stats-history` can
+    serve persisted and derived series interchangeably.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        entry = _empty_history_rollup_entry(key)
+        entry["tokens_saved"] = _coerce_int(value.get("tokens_saved"))
+        entry["compression_savings_usd_delta"] = round(
+            _coerce_float(value.get("compression_savings_usd_delta")), 6
+        )
+        entry["total_tokens_saved"] = _coerce_int(value.get("total_tokens_saved"))
+        entry["compression_savings_usd"] = round(
+            _coerce_float(value.get("compression_savings_usd")), 6
+        )
+        entry["total_input_tokens_delta"] = _coerce_int(value.get("total_input_tokens_delta"))
+        entry["total_input_tokens"] = _coerce_int(value.get("total_input_tokens"))
+        entry["total_input_cost_usd_delta"] = round(
+            _coerce_float(value.get("total_input_cost_usd_delta")), 6
+        )
+        entry["total_input_cost_usd"] = round(_coerce_float(value.get("total_input_cost_usd")), 6)
+        entry["output_tokens_saved_delta"] = _coerce_int(value.get("output_tokens_saved_delta"))
+        entry["output_savings_usd_delta"] = round(
+            _coerce_float(value.get("output_savings_usd_delta")), 6
+        )
+        by_provider = value.get("by_provider")
+        if isinstance(by_provider, dict):
+            entry["by_provider"] = {
+                k: v for k, v in by_provider.items() if isinstance(k, str) and isinstance(v, dict)
+            }
+        by_model = value.get("by_model")
+        if isinstance(by_model, dict):
+            entry["by_model"] = {
+                k: v for k, v in by_model.items() if isinstance(k, str) and isinstance(v, dict)
+            }
+        normalized[key] = entry
+    return normalized
+
+
+_HISTORY_ROLLUP_BUCKETS: tuple[tuple[str, str], ...] = (
+    ("day", "daily_history"),
+    ("week", "weekly_history"),
+    ("month", "monthly_history"),
+)
+
+
 def _normalize_daily_projects(raw: Any) -> dict[str, Any]:
     """Normalize the ``daily_projects`` bucket (today's per-project rollup).
 
@@ -685,6 +756,8 @@ class SavingsTracker:
 
         with self._lock:
             lifetime = self._state["lifetime"]
+            previous_total_input_tokens = lifetime["total_input_tokens"]
+            previous_total_input_cost_usd = lifetime["total_input_cost_usd"]
             lifetime["tokens_saved"] += delta_tokens
             lifetime["compression_savings_usd"] = round(
                 lifetime["compression_savings_usd"] + delta_usd, 6
@@ -708,6 +781,26 @@ class SavingsTracker:
                 model,
                 tokens_saved_delta=delta_tokens,
                 savings_usd_delta=delta_usd,
+            )
+
+            self._record_history_rollup_locked(
+                timestamp_dt=timestamp_dt,
+                provider=provider,
+                model=model,
+                tokens_saved_delta=delta_tokens,
+                savings_usd_delta=delta_usd,
+                input_tokens_delta=max(
+                    lifetime["total_input_tokens"] - previous_total_input_tokens, 0
+                ),
+                input_cost_usd_delta=max(
+                    lifetime["total_input_cost_usd"] - previous_total_input_cost_usd, 0.0
+                ),
+                output_tokens_saved_delta=0,
+                output_savings_usd_delta=0.0,
+                total_tokens_saved=lifetime["tokens_saved"],
+                compression_savings_usd=lifetime["compression_savings_usd"],
+                total_input_tokens=lifetime["total_input_tokens"],
+                total_input_cost_usd=lifetime["total_input_cost_usd"],
             )
 
             self._state["history"].append(
@@ -891,6 +984,27 @@ class SavingsTracker:
                 savings_usd_delta=delta_savings_usd,
                 input_tokens_delta=delta_input_tokens,
                 input_cost_usd_delta=delta_input_cost_usd,
+            )
+
+            self._record_history_rollup_locked(
+                timestamp_dt=timestamp_dt,
+                provider=provider,
+                model=model,
+                tokens_saved_delta=delta_tokens_saved,
+                savings_usd_delta=delta_savings_usd,
+                # Reconciled against any caller-supplied total_input_tokens /
+                # total_input_cost_usd override, matching how far
+                # lifetime["total_input_tokens"/"total_input_cost_usd"]
+                # (below) actually moved -- keeps this bucket's *_delta
+                # fields consistent with its cumulative fields.
+                input_tokens_delta=session_input_tokens_delta,
+                input_cost_usd_delta=session_input_cost_delta,
+                output_tokens_saved_delta=delta_output_tokens_saved,
+                output_savings_usd_delta=delta_output_savings_usd,
+                total_tokens_saved=lifetime["tokens_saved"],
+                compression_savings_usd=lifetime["compression_savings_usd"],
+                total_input_tokens=lifetime["total_input_tokens"],
+                total_input_cost_usd=lifetime["total_input_cost_usd"],
             )
 
             # In --mode cache, headroom's own compression (tokens_saved) is
@@ -1124,6 +1238,89 @@ class SavingsTracker:
             )
             del projects[evict]
 
+    def _record_history_rollup_locked(
+        self,
+        *,
+        timestamp_dt: datetime,
+        provider: str | None,
+        model: str,
+        tokens_saved_delta: int,
+        savings_usd_delta: float,
+        input_tokens_delta: int,
+        input_cost_usd_delta: float,
+        output_tokens_saved_delta: int,
+        output_savings_usd_delta: float,
+        total_tokens_saved: int,
+        compression_savings_usd: float,
+        total_input_tokens: int,
+        total_input_cost_usd: float,
+    ) -> None:
+        """Update the persisted daily/weekly/monthly trend buckets for one request.
+
+        Runs on every request (mirrors ``_record_daily_project_locked``) so the
+        long-term charts grow by one small bucket per day/week/month instead of
+        depending on how many raw per-request checkpoints ``_max_history_points``
+        happens to still be holding onto -- that ring buffer only backs the
+        ``hourly`` series and short/full history exports now.
+        """
+        for bucket, state_key in _HISTORY_ROLLUP_BUCKETS:
+            bucket_key = _to_utc_iso(_bucket_start(timestamp_dt, bucket))
+            buckets: dict[str, dict[str, Any]] = self._state.setdefault(state_key, {})
+            entry = buckets.setdefault(bucket_key, _empty_history_rollup_entry(bucket_key))
+            entry["tokens_saved"] += max(tokens_saved_delta, 0)
+            entry["compression_savings_usd_delta"] = round(
+                entry["compression_savings_usd_delta"] + max(savings_usd_delta, 0.0), 6
+            )
+            entry["total_tokens_saved"] = total_tokens_saved
+            entry["compression_savings_usd"] = round(compression_savings_usd, 6)
+            entry["total_input_tokens_delta"] += max(input_tokens_delta, 0)
+            entry["total_input_tokens"] = total_input_tokens
+            entry["total_input_cost_usd_delta"] = round(
+                entry["total_input_cost_usd_delta"] + max(input_cost_usd_delta, 0.0), 6
+            )
+            entry["total_input_cost_usd"] = round(total_input_cost_usd, 6)
+            entry["output_tokens_saved_delta"] += max(output_tokens_saved_delta, 0)
+            entry["output_savings_usd_delta"] = round(
+                entry["output_savings_usd_delta"] + max(output_savings_usd_delta, 0.0), 6
+            )
+
+            if tokens_saved_delta or savings_usd_delta or input_tokens_delta or input_cost_usd_delta:
+                prov = entry["by_provider"].setdefault(
+                    _normalize_provider(provider),
+                    {
+                        "tokens_saved": 0,
+                        "compression_savings_usd_delta": 0.0,
+                        "total_input_tokens_delta": 0,
+                        "total_input_cost_usd_delta": 0.0,
+                    },
+                )
+                prov["tokens_saved"] += max(tokens_saved_delta, 0)
+                prov["compression_savings_usd_delta"] = round(
+                    prov["compression_savings_usd_delta"] + max(savings_usd_delta, 0.0), 6
+                )
+                prov["total_input_tokens_delta"] += max(input_tokens_delta, 0)
+                prov["total_input_cost_usd_delta"] = round(
+                    prov["total_input_cost_usd_delta"] + max(input_cost_usd_delta, 0.0), 6
+                )
+
+                mod = entry["by_model"].setdefault(
+                    _normalize_model(model),
+                    {
+                        "tokens_saved": 0,
+                        "compression_savings_usd_delta": 0.0,
+                        "total_input_tokens_delta": 0,
+                        "total_input_cost_usd_delta": 0.0,
+                    },
+                )
+                mod["tokens_saved"] += max(tokens_saved_delta, 0)
+                mod["compression_savings_usd_delta"] = round(
+                    mod["compression_savings_usd_delta"] + max(savings_usd_delta, 0.0), 6
+                )
+                mod["total_input_tokens_delta"] += max(input_tokens_delta, 0)
+                mod["total_input_cost_usd_delta"] = round(
+                    mod["total_input_cost_usd_delta"] + max(input_cost_usd_delta, 0.0), 6
+                )
+
     def _record_by_model_locked(
         self,
         model: str,
@@ -1278,10 +1475,16 @@ class SavingsTracker:
         snapshot = self.snapshot()
         raw_history = snapshot["history"]
         series = {
+            # Hourly stays derived from the raw checkpoint log -- it's only
+            # ever used for recent/fine-grained views, so the ring buffer's
+            # eviction window doesn't matter here.
             "hourly": self._build_rollup(raw_history, bucket="hour"),
-            "daily": self._build_rollup(raw_history, bucket="day"),
-            "weekly": self._build_rollup(raw_history, bucket="week"),
-            "monthly": self._build_rollup(raw_history, bucket="month"),
+            # Day/week/month are persisted incrementally (see
+            # ``_record_history_rollup_locked``) so they don't lose older
+            # buckets when ``_max_history_points`` evicts old checkpoints.
+            "daily": snapshot["daily_history"],
+            "weekly": snapshot["weekly_history"],
+            "monthly": snapshot["monthly_history"],
         }
         history = self._history_for_response(raw_history, mode=history_mode)
         return {
@@ -1368,7 +1571,14 @@ class SavingsTracker:
                 },
                 "projects": self._projects_snapshot_locked(),
                 "by_model": self._by_model_snapshot_locked(),
+                "daily_history": self._history_rollup_snapshot_locked("daily_history"),
+                "weekly_history": self._history_rollup_snapshot_locked("weekly_history"),
+                "monthly_history": self._history_rollup_snapshot_locked("monthly_history"),
             }
+
+    def _history_rollup_snapshot_locked(self, state_key: str) -> list[dict[str, Any]]:
+        buckets: dict[str, dict[str, Any]] = self._state.get(state_key, {})
+        return [dict(entry) for entry in sorted(buckets.values(), key=lambda e: e["timestamp"])]
 
     def _default_state(self) -> dict[str, Any]:
         return {
@@ -1388,6 +1598,9 @@ class SavingsTracker:
             "daily_projects": {"date": None, "projects": {}},
             "weekly_projects": {"week_start": None, "projects": {}},
             "by_model": {},
+            "daily_history": {},
+            "weekly_history": {},
+            "monthly_history": {},
         }
 
     def _load_state(self) -> dict[str, Any]:
@@ -1490,7 +1703,21 @@ class SavingsTracker:
             "daily_projects": _normalize_daily_projects(raw.get("daily_projects")),
             "weekly_projects": _normalize_weekly_projects(raw.get("weekly_projects")),
             "by_model": _normalize_by_model(raw.get("by_model")),
+            "daily_history": _normalize_history_rollup(raw.get("daily_history")),
+            "weekly_history": _normalize_history_rollup(raw.get("weekly_history")),
+            "monthly_history": _normalize_history_rollup(raw.get("monthly_history")),
         }
+
+        # Upgrading from a state file saved before these persisted rollups
+        # existed: seed them once from whatever raw history is still on hand,
+        # so the weekly/monthly charts don't visibly reset to empty on deploy.
+        # Best-effort only -- points the raw ring buffer already evicted can't
+        # be recovered.
+        for bucket, state_key in _HISTORY_ROLLUP_BUCKETS:
+            if not state[state_key] and normalized_history:
+                seeded = self._build_rollup(normalized_history, bucket=bucket)
+                state[state_key] = {entry["timestamp"]: entry for entry in seeded}
+
         raw_lifetime_metrics = raw.get("lifetime_metrics")
         if isinstance(raw_lifetime_metrics, dict):
             state["lifetime_metrics"] = raw_lifetime_metrics
@@ -1662,6 +1889,9 @@ class SavingsTracker:
                     "weekly_projects", {"week_start": None, "projects": {}}
                 ),
                 "by_model": self._state.get("by_model", {}),
+                "daily_history": self._state.get("daily_history", {}),
+                "weekly_history": self._state.get("weekly_history", {}),
+                "monthly_history": self._state.get("monthly_history", {}),
                 "lifetime_metrics": lifetime_metrics,
             }
             json_data = json.dumps(payload, indent=2)
