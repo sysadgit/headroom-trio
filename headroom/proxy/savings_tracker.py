@@ -531,6 +531,34 @@ def _normalize_history_rollup(raw: Any) -> dict[str, dict[str, Any]]:
     return normalized
 
 
+def _migrate_weekly_history_to_ist(
+    rollup: dict[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    """Re-key any weekly_history buckets still on the old Monday-start UTC week
+    onto the IST Wed-Tue boundary ``_bucket_start`` now uses.
+
+    Without this, upgrading a running proxy would orphan the in-progress
+    week's already-accumulated old-format bucket and start a second, empty
+    one under the new key on the very next request. New-format keys always
+    land on IST midnight -- a fixed ``...T18:30:00Z`` UTC offset, since IST
+    has no DST -- so that suffix marks a key as already migrated. Distinct
+    old keys are 7 days apart and so is the new bucketing, so two old keys
+    landing on the same new key in practice doesn't happen; last write wins
+    if it ever did.
+    """
+    migrated: dict[str, dict[str, Any]] = {}
+    changed = False
+    for key, entry in rollup.items():
+        parsed = _parse_timestamp(key)
+        if parsed is None or key.endswith("18:30:00Z"):
+            migrated[key] = entry
+            continue
+        new_key = _to_utc_iso(_bucket_start(parsed, "week"))
+        migrated[new_key] = {**entry, "timestamp": new_key}
+        changed = True
+    return migrated, changed
+
+
 _HISTORY_ROLLUP_BUCKETS: tuple[tuple[str, str], ...] = (
     ("day", "daily_history"),
     ("week", "weekly_history"),
@@ -1691,6 +1719,10 @@ class SavingsTracker:
                 _coerce_float(last.get("total_input_cost_usd")),
             )
 
+        weekly_history, weekly_history_migrated = _migrate_weekly_history_to_ist(
+            _normalize_history_rollup(raw.get("weekly_history"))
+        )
+
         state = {
             "schema_version": SCHEMA_VERSION,
             "lifetime": {
@@ -1709,9 +1741,12 @@ class SavingsTracker:
             "weekly_projects": _normalize_weekly_projects(raw.get("weekly_projects")),
             "by_model": _normalize_by_model(raw.get("by_model")),
             "daily_history": _normalize_history_rollup(raw.get("daily_history")),
-            "weekly_history": _normalize_history_rollup(raw.get("weekly_history")),
+            "weekly_history": weekly_history,
             "monthly_history": _normalize_history_rollup(raw.get("monthly_history")),
         }
+
+        if weekly_history_migrated:
+            self._needs_schema_save = True
 
         # Upgrading from a state file saved before these persisted rollups
         # existed: seed them once from whatever raw history is still on hand,
