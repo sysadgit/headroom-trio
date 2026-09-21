@@ -793,8 +793,8 @@ def test_savings_tracker_rollups_preserve_spend_and_input_history(tmp_path, monk
 
     weekly = response["series"]["weekly"]
     assert [point["timestamp"] for point in weekly] == [
-        "2026-03-23T00:00:00Z",
-        "2026-03-30T00:00:00Z",
+        "2026-03-24T18:30:00Z",
+        "2026-03-31T18:30:00Z",
     ]
     assert weekly[0]["tokens_saved"] == 185
     assert weekly[0]["total_tokens_saved"] == 185

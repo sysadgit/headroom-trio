@@ -105,8 +105,12 @@ def _bucket_start(timestamp: datetime, bucket: str) -> datetime:
     if bucket == "day":
         return timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
     if bucket == "week":
-        day_start = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
-        return day_start - timedelta(days=day_start.weekday())
+        # IST Wed 00:00 - Tue 24:00 week, matching `_tuesday_week_start` (the
+        # per-project weekly rollup) so the dashboard's two weekly widgets agree.
+        day_start_ist = timestamp.astimezone(_IST).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return day_start_ist - timedelta(days=(day_start_ist.weekday() - 2) % 7)
     if bucket == "month":
         return timestamp.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     raise ValueError(f"Unsupported savings history bucket: {bucket}")
@@ -554,8 +558,9 @@ _IST = ZoneInfo("Asia/Kolkata")
 def _tuesday_week_start(timestamp: datetime) -> str:
     """IST date (Wed 00:00 – Tue 24:00 IST week) that ``timestamp`` falls into.
 
-    Independent of ``_bucket_start``'s Monday-start UTC week, which backs the
-    `/stats-history` charts and stays untouched.
+    Same week boundary as ``_bucket_start``'s "week" case, which backs the
+    `/stats-history` weekly chart -- kept as a separate helper because it
+    returns a date string keyed by IST calendar date, not a UTC bucket key.
     """
     day_start_ist = timestamp.astimezone(_IST).replace(
         hour=0, minute=0, second=0, microsecond=0
