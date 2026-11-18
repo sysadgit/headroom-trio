@@ -88,6 +88,7 @@ def _register_commands() -> None:
         proxy,  # noqa: F401
         recover,  # noqa: F401
         savings,  # noqa: F401
+        token,  # noqa: F401
         tools,  # noqa: F401
         update,  # noqa: F401
         wrap,  # noqa: F401

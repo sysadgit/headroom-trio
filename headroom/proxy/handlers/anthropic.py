@@ -703,7 +703,7 @@ class AnthropicHandlerMixin:
             if isinstance(body_model, str) and model != body_model:
                 body["model"] = model
                 body_mutation_tracker.mark_mutated("sanitize_model_id")
-            if (blocked := self._reject_if_model_not_allowed(model)) is not None:
+            if (blocked := self._reject_if_model_not_allowed(model, request)) is not None:
                 return blocked
             messages = body.get("messages", [])
             # Strip streaming-only "index" keys from request content blocks BEFORE any

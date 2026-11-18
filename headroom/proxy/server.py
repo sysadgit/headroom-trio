@@ -126,6 +126,7 @@ from headroom.proxy.cost import (
     build_session_summary,  # noqa: F401
     merge_cost_stats,  # noqa: F401
 )
+from headroom.proxy.device_tokens import TOKEN_HEADER, DeviceTokenStore
 from headroom.proxy.helpers import (
     COMPRESSION_TIMEOUT_SECONDS,  # noqa: F401
     EAGER_PRELOAD_TIMEOUT_SECONDS,
@@ -826,6 +827,9 @@ class HeadroomProxy(
         # Model allow/deny list (Anthropic /v1/messages only). Disabled unless
         # configured, so the default request path is unchanged.
         self.model_allowlist = ModelAllowlist(config.model_allowlist)
+        # Per-device tokens that may unlock models the allowlist denies. No-op
+        # unless the token file exists (see headroom.proxy.device_tokens).
+        self.device_tokens = DeviceTokenStore()
 
         # Initialize transforms based on routing mode.
         #
@@ -1365,11 +1369,30 @@ class HeadroomProxy(
             },
         )
 
-    def _reject_if_model_not_allowed(self, model: str) -> JSONResponse | None:
-        """Return a 400 JSON response if ``model`` fails the allow/deny check, else None."""
+    def _reject_if_model_not_allowed(
+        self, model: str, request: Request | None = None
+    ) -> JSONResponse | None:
+        """Return a 400 JSON response if ``model`` fails the allow/deny check, else None.
+
+        A caller presenting a valid ``x-headroom-device-token`` whose entry permits
+        ``model`` is let through. The token store is only consulted when the model
+        would otherwise be blocked, so allowed models never pay for the lookup.
+        """
         reason = self.model_allowlist.check(model)
         if reason is None:
             return None
+        if request is not None:
+            device = self.device_tokens.lookup(request.headers.get(TOKEN_HEADER))
+            if device is not None and device.permits(model):
+                logger.info(
+                    "event=model_allowed_by_device_token device=%s model=%s", device.name, model
+                )
+                return None
+            logger.info(
+                "event=model_blocked model=%s device=%s",
+                model,
+                device.name if device is not None else "none",
+            )
         return JSONResponse(
             status_code=400,
             content={
@@ -3158,6 +3181,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         "/v1/toin",
         "/v1/compress",
         "/v1/models",
+        "/headroom/whoami",
     )
 
     # X-Headroom-Stack: SDK adapters (TS openai/anthropic/etc.) tag their
@@ -3376,6 +3400,26 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     from headroom.proxy.extensions import install_all as _install_extensions
 
     _install_extensions(app, config, enabled=getattr(config, "proxy_extensions", None))
+
+    @app.get("/headroom/whoami")
+    async def headroom_whoami(request: Request):
+        """Tell a device whether its token is recognised. Free: no upstream call.
+
+        Reveals only the caller's own device name and what that entry allows,
+        never a hash. An unknown/missing/expired token gets the same neutral
+        answer, so the endpoint can't be used to probe for valid tokens.
+        """
+        device = proxy.device_tokens.lookup(request.headers.get(TOKEN_HEADER))
+        if device is None:
+            return JSONResponse({"valid": False, "device": None, "allow": []})
+        return JSONResponse(
+            {
+                "valid": True,
+                "device": device.name,
+                "allow": list(device.allow),
+                "expires_at": device.expires_at,
+            }
+        )
 
     # Health & Metrics
     @app.get("/livez")
