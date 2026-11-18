@@ -35,6 +35,10 @@ def should_redact_key(key: str) -> bool:
         or normalized.endswith("_password")
         or normalized.endswith("_access_token")
         or normalized.endswith("_refresh_token")
+        # Any header/field that ends in "token" (e.g. x-headroom-device-token,
+        # x-headroom-proxy-token) carries a secret. Plain "token_count" and
+        # "max_tokens" do not end in "_token" and stay visible.
+        or normalized.endswith("_token")
     )
 
 

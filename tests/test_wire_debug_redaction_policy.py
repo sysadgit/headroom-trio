@@ -43,3 +43,10 @@ def test_wire_debug_key_matching_normalizes_dashes_and_case() -> None:
     assert should_redact_key("Anthropic-API-Key")
     assert should_redact_key("custom-refresh-token")
     assert not should_redact_key("token_count")
+
+
+def test_headroom_token_headers_are_redacted() -> None:
+    assert should_redact_key("x-headroom-device-token")
+    assert should_redact_key("X-Headroom-Proxy-Token")
+    assert not should_redact_key("max_tokens")
+    assert not should_redact_key("x-headroom-project")

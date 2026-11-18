@@ -307,3 +307,34 @@ def test_whoami_exempt_from_project_requirement(monkeypatch, tmp_path) -> None:
         assert client.post(MESSAGES, json=_body("claude-sonnet-4-6")).status_code == 400
     finally:
         client.__exit__(None, None, None)
+
+
+def test_secret_never_appears_in_proxy_logs(monkeypatch, tmp_path) -> None:
+    """The inbound-request log prints headers; the token must be redacted there."""
+    import logging
+
+    records: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record.getMessage())
+
+    handler = _Capture(level=logging.DEBUG)
+    headroom_logger = logging.getLogger("headroom")
+    previous_level = headroom_logger.level
+    headroom_logger.addHandler(handler)
+    headroom_logger.setLevel(logging.DEBUG)
+    client, _, path = _client(monkeypatch, tmp_path)
+    try:
+        secret = add_device("anand-macbook", path=path)
+        client.post(MESSAGES, json=_body(FABLE), headers={TOKEN_HEADER: secret})
+        client.get("/headroom/whoami", headers={TOKEN_HEADER: secret})
+        client.post(MESSAGES, json=_body(FABLE), headers={TOKEN_HEADER: "hrt_wrongsecret"})
+    finally:
+        client.__exit__(None, None, None)
+        headroom_logger.removeHandler(handler)
+        headroom_logger.setLevel(previous_level)
+    joined = "\n".join(records)
+    assert "event=proxy_inbound_request" in joined  # we really captured request logs
+    assert secret not in joined
+    assert "hrt_wrongsecret" not in joined
