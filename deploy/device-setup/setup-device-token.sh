@@ -1,9 +1,13 @@
-#!/usr/bin/env bash
-# Headroom device-token setup for macOS and Linux.
+#!/bin/sh
+# Headroom device-token setup for macOS and Linux (portable POSIX sh).
 #
-#   ./setup-device-token.sh --url https://headroom.example.com            # prompts for token
-#   ./setup-device-token.sh --url https://... --token hrt_xxx             # non-interactive
-#   ./setup-device-token.sh --uninstall                                    # remove it again
+# Run it with any shell:   sh setup-device-token.sh     bash setup-device-token.sh
+#                          zsh setup-device-token.sh    ./setup-device-token.sh
+#
+#   setup-device-token.sh                                   # prompts for the token
+#   setup-device-token.sh --url https://headroom.example    # different server
+#   setup-device-token.sh --token hrt_xxx                   # non-interactive
+#   setup-device-token.sh --uninstall                       # remove it again
 #
 # What it does (and nothing else):
 #   1. Verifies the token against <url>/headroom/whoami. If that fails, it
@@ -13,24 +17,26 @@
 #      X-Headroom-Project) are preserved, never replaced.
 #
 # It never touches ANTHROPIC_BASE_URL, ~/.claude/settings.json, or any project.
-set -euo pipefail
+set -eu
+umask 077   # every file this script writes (backup, temp) is private to you
 
+DEFAULT_URL="https://headroom.goferzone.com"
 BEGIN_MARK="# >>> headroom-device-token >>>"
 END_MARK="# <<< headroom-device-token <<<"
 HEADER_NAME="x-headroom-device-token"
 
-URL=""
+URL="${HEADROOM_URL:-$DEFAULT_URL}"
 TOKEN="${HEADROOM_DEVICE_TOKEN:-}"
 RC_FILE=""
 UNINSTALL=0
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --url)       URL="${2:-}"; shift 2 ;;
-    --token)     TOKEN="${2:-}"; shift 2 ;;
-    --rc)        RC_FILE="${2:-}"; shift 2 ;;
+    --url)       [ $# -ge 2 ] || { echo "--url needs a value" >&2; exit 2; }; URL="$2"; shift 2 ;;
+    --token)     [ $# -ge 2 ] || { echo "--token needs a value" >&2; exit 2; }; TOKEN="$2"; shift 2 ;;
+    --rc)        [ $# -ge 2 ] || { echo "--rc needs a value" >&2; exit 2; }; RC_FILE="$2"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)   usage 0 ;;
     *) echo "Unknown option: $1" >&2; usage 2 ;;
@@ -38,22 +44,32 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$RC_FILE" ]; then
-  case "$(basename "${SHELL:-}")" in
-    zsh)  RC_FILE="$HOME/.zshrc" ;;
-    bash) if [ "$(uname -s)" = "Darwin" ]; then RC_FILE="$HOME/.bash_profile"; else RC_FILE="$HOME/.bashrc"; fi ;;
-    *)    echo "Unsupported shell '${SHELL:-unknown}'. Re-run with --rc /path/to/rcfile" >&2; exit 2 ;;
+  case "${SHELL:-}" in
+    */zsh)  RC_FILE="$HOME/.zshrc" ;;
+    */bash) if [ "$(uname -s)" = "Darwin" ]; then RC_FILE="$HOME/.bash_profile"; else RC_FILE="$HOME/.bashrc"; fi ;;
+    */fish) echo "fish uses a different syntax and is not supported. Re-run with --rc FILE for a POSIX-style file." >&2; exit 2 ;;
+    */sh|*/dash|*/ksh|*/ash) RC_FILE="$HOME/.profile" ;;
+    *) echo "Unknown shell '${SHELL:-unset}'. Re-run with --rc /path/to/rcfile" >&2; exit 2 ;;
   esac
 fi
+echo "Shell config file: $RC_FILE"
 
-remove_block() {  # $1 = file ; prints result on stdout
+# Print $1 with any previous Headroom block removed.
+remove_block() {
+  # Also drops the one blank line the installer puts in front of the block, so
+  # install + uninstall leaves the file exactly as it was.
   awk -v b="$BEGIN_MARK" -v e="$END_MARK" '
-    $0==b {skip=1; next}
+    $0==b {skip=1; held=0; next}
     $0==e {skip=0; next}
-    !skip {print}' "$1"
+    skip {next}
+    { if (held) print ""
+      if ($0=="") { held=1; next }
+      held=0; print }
+    END { if (held) print "" }' "$1"
 }
 
 backup() {
-  local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
+  stamp="$(date +%Y%m%d-%H%M%S)"
   cp -p "$RC_FILE" "$RC_FILE.headroom-backup-$stamp"
   echo "Backup written: $RC_FILE.headroom-backup-$stamp"
 }
@@ -67,7 +83,6 @@ if [ "$UNINSTALL" = 1 ]; then
   exit 0
 fi
 
-[ -n "$URL" ] || { echo "Missing --url (the Headroom server, e.g. https://headroom.example.com)" >&2; usage 2; }
 URL="${URL%/}"
 case "$URL" in
   https://*) ;;
@@ -78,14 +93,32 @@ esac
 
 if [ -z "$TOKEN" ]; then
   printf "Paste your device token (input hidden): "
-  read -r -s TOKEN; echo
+  if [ -t 0 ]; then
+    old_tty="$(stty -g)"
+    trap 'stty "$old_tty" 2>/dev/null' EXIT INT TERM
+    stty -echo
+    read -r TOKEN || true
+    stty "$old_tty"
+    trap - EXIT INT TERM
+  else
+    read -r TOKEN || true
+  fi
+  echo
 fi
 TOKEN="$(printf '%s' "$TOKEN" | tr -d '[:space:]')"
-case "$TOKEN" in hrt_*) ;; *) echo "That doesn't look like a Headroom device token (should start with hrt_)." >&2; exit 2 ;; esac
-command -v curl >/dev/null || { echo "curl is required." >&2; exit 2; }
+case "$TOKEN" in
+  hrt_*) ;;
+  *) echo "That doesn't look like a Headroom device token (should start with hrt_)." >&2; exit 2 ;;
+esac
+case "${TOKEN#hrt_}" in
+  ""|*[!A-Za-z0-9_-]*) echo "The token contains characters a Headroom token never has. Copy it again from 1Password." >&2; exit 2 ;;
+esac
+command -v curl >/dev/null 2>&1 || { echo "curl is required." >&2; exit 2; }
 
 echo "Checking token with $URL/headroom/whoami ..."
-RESP="$(curl -fsS --max-time 15 -H "$HEADER_NAME: $TOKEN" "$URL/headroom/whoami" 2>&1)" || {
+# The token goes to curl on stdin, so it never shows up in the process list.
+RESP="$(printf 'header = "%s: %s"\n' "$HEADER_NAME" "$TOKEN" \
+  | curl -fsS --max-time 15 --config - "$URL/headroom/whoami" 2>&1)" || {
   echo "FAIL: could not reach $URL/headroom/whoami: $RESP" >&2
   echo "Nothing was changed." >&2; exit 1; }
 if ! printf '%s' "$RESP" | grep -q '"valid":[[:space:]]*true'; then
@@ -105,17 +138,14 @@ remove_block "$RC_FILE" > "$tmp"     # idempotent: replace any previous block
   printf '%s\n' "# Appends the device token; existing ANTHROPIC_CUSTOM_HEADERS (e.g. X-Headroom-Project) are kept."
   printf '%s\n' "case \"\${ANTHROPIC_CUSTOM_HEADERS:-}\" in"
   printf '%s\n' "  *$HEADER_NAME*) ;;"
-  # A literal newline inside the quotes (portable to bash and zsh) separates headers.
+  # A literal newline inside the quotes (works in sh, bash, zsh, dash, ksh) separates headers.
   printf '%s\n' "  *) export ANTHROPIC_CUSTOM_HEADERS=\"\${ANTHROPIC_CUSTOM_HEADERS:+\$ANTHROPIC_CUSTOM_HEADERS"
   printf '%s\n' "}$HEADER_NAME: $TOKEN\" ;;"
   printf '%s\n' "esac"
   printf '%s\n' "$END_MARK"
 } > "$RC_FILE.new"
 rm -f "$tmp"
-chmod 600 "$RC_FILE.new" 2>/dev/null || true
-# keep original permissions of the rc file
-if [ -f "$RC_FILE" ]; then chmod --reference="$RC_FILE" "$RC_FILE.new" 2>/dev/null || true; fi
-cat "$RC_FILE.new" > "$RC_FILE"; rm -f "$RC_FILE.new"
+cat "$RC_FILE.new" > "$RC_FILE"; rm -f "$RC_FILE.new"   # keeps the rc file's own permissions
 
-echo "Done. Open a NEW terminal (or run: source $RC_FILE) and start Claude Code."
+echo "Done. Open a NEW terminal (or run: . $RC_FILE) and start Claude Code."
 echo "Keep ANY line that sets ANTHROPIC_CUSTOM_HEADERS (project header) ABOVE the Headroom block."
